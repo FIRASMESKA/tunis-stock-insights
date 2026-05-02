@@ -20,14 +20,17 @@ export default function StockDetail() {
   const { ticker = "" } = useParams();
   const [period, setPeriod] = useState(180);
 
-  const { data: history, isLoading } = useQuery({
-    queryKey: ["history", ticker, period],
-    queryFn: () => fetchHistory(ticker, period),
-    enabled: !!ticker,
-  });
-
   const { data: stocks = [] } = useQuery({ queryKey: ["stocks"], queryFn: fetchStocks });
   const meta = stocks.find((s) => s.ticker === ticker);
+
+  // Use stockName from the `principaux` API as the symbol for the history endpoint when available.
+  // Wait for stocks to be loaded before fetching history to ensure we can use meta.stockName.
+  const symbol = meta?.stockName ?? ticker;
+  const { data: history, isLoading } = useQuery({
+    queryKey: ["history", symbol, period],
+    queryFn: () => fetchHistory(symbol, period),
+    enabled: !!ticker && stocks.length > 0,
+  });
 
   const candles = useMemo(() => (history ? toCandles(history) : []), [history]);
   const closes = candles.map((c) => c.c);
