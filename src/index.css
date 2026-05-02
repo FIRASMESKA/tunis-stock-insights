@@ -86,7 +86,7 @@
     @apply border-border;
   }
   html {
-    @apply dark;
+    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground antialiased;
