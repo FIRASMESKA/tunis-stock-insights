@@ -1,4 +1,4 @@
-// Client API pour l'API publique irbe7 (Bourse de Tunis), via edge function proxy
+// Client API : récupère les vraies données BVMT live via l'edge function bvmt-scrape (Firecrawl + ilboursa.com)
 import { supabase } from "@/integrations/supabase/client";
 
 export type StockListItem = {
@@ -10,6 +10,7 @@ export type StockListItem = {
   close: number;
   high: number;
   low: number;
+  open: number;
   change: number;
   volume: number;
   caps: number;
@@ -26,42 +27,77 @@ export type HistoryResponse = {
   v: number[];
 };
 
-const FN_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/bvmt`;
+export type LiveQuote = {
+  ticker: string;
+  name?: string;
+  isin?: string;
+  last: number;
+  open: number;
+  high: number;
+  low: number;
+  prev: number;
+  change: number;
+  volume: number;
+  capEch: number;
+  valorisation?: string;
+  asOf: string;
+};
 
-async function call<T>(path: string): Promise<T> {
+const SCRAPE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/bvmt-scrape`;
+
+async function callScrape<T>(params: Record<string, string>): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
-  const res = await fetch(`${FN_URL}?path=${encodeURIComponent(path)}`, {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${SCRAPE_URL}?${qs}`, {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${session?.access_token ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
   });
-  if (!res.ok) throw new Error(`BVMT API error: ${res.status}`);
+  if (!res.ok) throw new Error(`bvmt-scrape error: ${res.status}`);
   return res.json();
 }
 
 export async function fetchStocks(): Promise<StockListItem[]> {
-  const raw = await call<any[]>("principaux");
-  return raw
-    .filter((r) => r.referentiel?.ticker)
-    .map((r) => ({
-      ticker: r.referentiel.ticker,
-      stockName: r.referentiel.stockName,
-      arabName: r.referentiel.arabName,
-      isin: r.referentiel.isin,
-      last: r.last ?? r.close ?? 0,
-      close: r.close ?? 0,
-      high: r.high ?? 0,
-      low: r.low ?? 0,
-      change: r.change ?? 0,
-      volume: r.volume ?? 0,
-      caps: r.caps ?? 0,
-      seance: r.seance ?? "",
-    }));
+  const { quotes, asOf } = await callScrape<{ quotes: any[]; asOf: string }>({ action: "list" });
+  const seance = new Date(asOf).toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+  return quotes.map((q) => ({
+    ticker: q.ticker,
+    stockName: q.ticker,
+    arabName: "",
+    isin: "",
+    last: q.last,
+    close: q.last,
+    open: q.open,
+    high: q.high,
+    low: q.low,
+    change: q.change,
+    volume: q.volume,
+    caps: q.capEch,
+    seance,
+  }));
 }
 
-export async function fetchHistory(ticker: string, days = 365): Promise<HistoryResponse> {
-  const to = Math.floor(Date.now() / 1000);
-  const from = to - days * 24 * 3600;
-  return call<HistoryResponse>(`history?symbol=${ticker}&resolution=1D&from=${from}&to=${to}&countback=${days}`);
+export async function fetchQuote(ticker: string): Promise<{ quote: LiveQuote; history: HistoryResponse }> {
+  const { quote, history } = await callScrape<{ quote: LiveQuote; history: any[] }>({
+    action: "quote",
+    ticker,
+  });
+  // Convert history rows to TradingView UDF-like response so the rest of the code keeps working.
+  const h: HistoryResponse = {
+    s: history.length ? "ok" : "no_data",
+    t: history.map((r) => r.t),
+    o: history.map((r) => r.o),
+    h: history.map((r) => r.h),
+    l: history.map((r) => r.l),
+    c: history.map((r) => r.c),
+    v: history.map((r) => r.v),
+  };
+  return { quote, history: h };
+}
+
+// Conserve l'ancienne signature pour StockDetail.tsx
+export async function fetchHistory(ticker: string, _days = 365): Promise<HistoryResponse> {
+  const { history } = await fetchQuote(ticker);
+  return history;
 }
